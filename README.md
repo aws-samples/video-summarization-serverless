@@ -28,6 +28,7 @@ The solutions comprises of the below steps:
 * [AWS Serverless Application Model](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-install.html) (AWS SAM) installed
 * [Amazon Bedrock access setup](https://catalog.us-east-1.prod.workshops.aws/genai-on-aws/en-US/02-start-workshop/01-bedrock-setup) for Jurassic-2 Ultra model
 * [Puthon 3.9.9](https://www.python.org/downloads/release/python-390/) installed
+* Port 8501 opened for Streamlit
 
 We recommend using [AWS Cloud9](https://aws.amazon.com/cloud9/) to create an environment to get access to the AWS CLI and SAM CLI from a bash terminal. AWS Cloud9 is a browser-based IDE that provides a development environment in the cloud. While creating the new environment, ensure you choose Linux2 as the operating system. Alternatively, you can use your bash terminal in your favorite IDE and configure your AWS credentials in your terminal.
 
