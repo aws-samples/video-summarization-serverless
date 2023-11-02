@@ -1,0 +1,380 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Video summarization 
+Parameters:
+  S3BucketName:
+    Description: "S3 bucket name"
+    Type: String
+    Default: 'videosummarization'
+
+  VideoPrefix:
+    Description: "S3 prefix for video  files"
+    Type: String
+    Default: 'video-files'
+
+  VideoProcessingStagingPrefix:
+    Description: "S3 prefix for video clips files"
+    Type: String
+    Default: 'video-processing-staging'
+    
+  VideoSummaryFilesPrefix:
+    Description: "S3 prefix for video clips summary files"
+    Type: String
+    Default: 'video-summary-files'  
+
+  VideoPDFReportFilesPrefix:
+    Description: "S3 prefix for final pdf report files"
+    Type: String
+    Default: 'video-pdf-report-files'    
+    
+  BedrockModelId:
+    Description: 'Amazon Bedrock Model Id'
+    Type: String
+    Default: 'ai21.j2-ultra-v1'   
+    
+  SummparyReportURLExpiration:
+    Description: 'Pre-signed url expiration'
+    Type: Number
+    Default: 86400    
+    
+  RekognitionSNSTopicName:
+    Description: 'Amazon Rekognition will send job completion notification to this topic'
+    Type: String
+    Default: 'video-segments-detection-notification-topic'
+
+  VideoProcessingWorkflowName:
+    Description: 'Name of the Step Function for Video Processing Workflow'
+    Type: String
+    Default: 'video-processing-workflow'    
+    
+  PDFFileURLExpiration:
+    Description: 'Pre-signed url expiration'
+    Type: Number
+    Default: 86400    
+    
+  MaxConcurrency:
+    Description: 'Max Concurrency for parallel processing of workflow'
+    Type: Number
+    Default: 10
+    
+  MaxItemsPerBatch:
+    Description: 'Max Items Per batch for  parallel processing of workflow'
+    Type: Number
+    Default: 10
+    
+  WaitTimeForJob:
+    Description: 'Wait time period to check job status'
+    Type: Number
+    Default: 30
+
+Globals:
+  Function:
+    Runtime: python3.9
+
+Resources:
+  VideoBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub ${S3BucketName}-bucket-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  FFMpegLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      ContentUri: src/ffmpeg-layer/
+      CompatibleRuntimes:
+        - python3.9
+    Metadata:
+      BuildMethod: makefile
+      
+  GenerateVideoSegments:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/generate-video-segments/    
+      Handler: app.lambda_handler
+      Layers:
+        - !Ref FFMpegLayer
+      Timeout: 900
+      MemorySize: 512
+      EphemeralStorage:
+        Size: 1024
+      Environment:
+        Variables:
+          VIDEO_PROCESSING_STAGING_PREFIX: !Ref VideoProcessingStagingPrefix
+          VIDEO_SUMMARY_FILES_PREFIX: !Ref VideoSummaryFilesPrefix          
+
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - S3CrudPolicy:
+            BucketName: !Sub ${S3BucketName}-bucket-${AWS::AccountId}
+
+  GenerateVideoClipTranscripts:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/generate-video-clip-transcripts/    
+      Handler: app.lambda_handler
+      Timeout: 120
+      MemorySize: 128
+      Environment:
+        Variables:
+          VIDEO_PROCESSING_STAGING_PREFIX: !Ref VideoProcessingStagingPrefix
+          VIDEO_SUMMARY_FILES_PREFIX: !Ref VideoSummaryFilesPrefix            
+
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - S3CrudPolicy:
+            BucketName: !Sub ${S3BucketName}-bucket-${AWS::AccountId}
+        - Statement:
+            - Effect: Allow
+              Action:
+                - "transcribe:StartTranscriptionJob"
+              Resource: "*"            
+
+  SummarizeVideoClips:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/summarize-video-clips/    
+      Handler: app.lambda_handler
+      Timeout: 600
+      MemorySize: 128
+      Environment:
+        Variables:
+          VIDEO_PROCESSING_STAGING_PREFIX: !Ref VideoProcessingStagingPrefix
+          VIDEO_SUMMARY_FILES_PREFIX: !Ref VideoSummaryFilesPrefix             
+          BEDROCK_MODEL_ID: !Ref BedrockModelId          
+
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - S3CrudPolicy:
+            BucketName: !Sub ${S3BucketName}-bucket-${AWS::AccountId}
+        - Statement:
+            - Effect: Allow
+              Action:
+                - "bedrock:*"
+              Resource: "*" 
+
+  CheckTranscriptionJobs:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/check-transcription-jobs/    
+      Handler: app.lambda_handler
+      Timeout: 120
+      MemorySize: 128
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - "transcribe:GetTranscriptionJob"
+              Resource: "*"  
+
+  CreateSummaryReport:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/create-summary-report/    
+      Handler: app.lambda_handler
+      Timeout: 900
+      MemorySize: 512
+      EphemeralStorage:
+        Size: 1024
+      Environment:
+        Variables:
+          VIDEO_PDF_REPORT_FILES_PREFIX: !Ref VideoPDFReportFilesPrefix
+          VIDEO_SUMMARY_FILES_PREFIX: !Ref VideoSummaryFilesPrefix 
+          PRESIGNED_URL_EXPIRATION: !Ref PDFFileURLExpiration
+          VIDEO_SUMMARY_TABLE: !Ref VideoSummaryTable
+
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - S3CrudPolicy:
+            BucketName: !Sub ${S3BucketName}-bucket-${AWS::AccountId}
+        - Statement:
+            - Effect: Allow
+              Action:
+                - "dynamodb:PutItem"
+              Resource:
+                - !GetAtt VideoSummaryTable.Arn             
+
+  StartSegmentDetection:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/start-segment-detection/    
+      Handler: app.lambda_handler
+      Timeout: 120
+      MemorySize: 128
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref RekognitionSNSTopic
+          REKOGNITION_ROLE_ARN: !GetAtt RekognitionRole.Arn
+
+      Events:
+        VideoCreated:
+          Type: S3
+          Properties:
+            Bucket: !Ref VideoBucket    
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: !Sub ${VideoPrefix}/ 
+                  - Name: suffix
+                    Value: .mp4
+                
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - S3ReadPolicy:
+            BucketName: !Sub ${S3BucketName}-bucket-${AWS::AccountId}        
+        - Statement:
+            - Effect: Allow
+              Action:
+                - "rekognition:StartSegmentDetection"
+              Resource: "*"  
+            - Effect: Allow
+              Action: 
+                - "iam:PassRole"
+              Resource: !GetAtt RekognitionRole.Arn
+
+  StartVideoProcessingWorkflow:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/start-video-processing-workflow/    
+      Handler: app.lambda_handler
+      Timeout: 120
+      MemorySize: 128
+      Environment:
+        Variables:
+          STATE_MACHINE_VIDEO_PROCESSING_ARN: !Ref VideoProcessingWorkflow
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt VideoProcessingWorkflow.Name
+
+  VideoProcessingWorkflow:
+    Type: AWS::Serverless::StateMachine 
+    Properties:
+      Name: !Ref VideoProcessingWorkflowName
+      DefinitionUri: statemachine/video-processing-workflow.yaml
+      Role: !GetAtt StatesExecutionRole.Arn
+      DefinitionSubstitutions:
+        MaxConcurrency: !Ref MaxConcurrency
+        MaxItemsPerBatch: !Ref MaxItemsPerBatch
+        WaitTimeForJob: !Ref WaitTimeForJob
+        GenerateVideoSegmentsFunctionArn: !GetAtt GenerateVideoSegments.Arn
+        GenerateVideoClipTranscriptsFunctionArn: !GetAtt GenerateVideoClipTranscripts.Arn
+        CheckTranscriptionJobsFunctionArn: !GetAtt CheckTranscriptionJobs.Arn
+        SummarizeVideoClipsFunctionArn: !GetAtt SummarizeVideoClips.Arn
+        CreateSummaryReportFunctionArn: !GetAtt CreateSummaryReport.Arn
+      
+  RekognitionSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Ref RekognitionSNSTopicName
+      Subscription: 
+        - Protocol: lambda
+          Endpoint: !GetAtt StartVideoProcessingWorkflow.Arn
+
+  StartVideoProcessingWorkflowPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref StartVideoProcessingWorkflow
+      Principal: sns.amazonaws.com  
+            
+      
+  RekognitionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: rekognition.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PublishToSNSTopic
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref RekognitionSNSTopic
+
+  StatesExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AllowInvokeFunction
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: 
+                  - !Sub ${GenerateVideoSegments.Arn}:*
+                  - !Sub ${GenerateVideoSegments.Arn}:*
+                  - !Sub ${GenerateVideoClipTranscripts.Arn}:*
+                  - !Sub ${CheckTranscriptionJobs.Arn}:*
+                  - !Sub ${SummarizeVideoClips.Arn}:*
+                  - !Sub ${CreateSummaryReport.Arn}:*                 
+                  - !GetAtt GenerateVideoSegments.Arn
+                  - !GetAtt GenerateVideoClipTranscripts.Arn
+                  - !GetAtt CheckTranscriptionJobs.Arn
+                  - !GetAtt SummarizeVideoClips.Arn
+                  - !GetAtt CreateSummaryReport.Arn
+        - PolicyName: AllowStepFunctionExecution       
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${VideoProcessingWorkflowName}
+        - PolicyName: AllowGetSegmentDetection
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: rekognition:GetSegmentDetection
+                Resource: "*"
+        - PolicyName: AllowXRay
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                Resource: "*"   
+
+  VideoSummaryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: fileName
+          AttributeType: S
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: fileName
+          KeyType: HASH
+      TableName: VideoSummaryTable
+      SSESpecification:
+        SSEEnabled: true   
+
+Outputs:
+  VideoBucket:
+    Description: Video  S3 Bucket
+    Value: !Ref VideoBucket

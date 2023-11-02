@@ -1,0 +1,124 @@
+Comment: A description of my state machine
+StartAt: Get Segments Detection Result
+States:
+  Get Segments Detection Result:
+    Type: Task
+    Parameters:
+      JobId.$: $.JobId
+    Resource: arn:aws:states:::aws-sdk:rekognition:getSegmentDetection
+    Next: Map
+  Map:
+    Type: Map
+    ItemProcessor:
+      ProcessorConfig:
+        Mode: DISTRIBUTED
+        ExecutionType: STANDARD
+      StartAt: Generate Video Clips and Thumbnails
+      States:
+        Generate Video Clips and Thumbnails:
+          Type: Task
+          Resource: arn:aws:states:::lambda:invoke
+          Parameters:
+            Payload.$: $
+            FunctionName:
+          Retry:
+            - ErrorEquals:
+                - Lambda.ServiceException
+                - Lambda.AWSLambdaException
+                - Lambda.SdkClientException
+                - Lambda.TooManyRequestsException
+              IntervalSeconds: 1
+              MaxAttempts: 3
+              BackoffRate: 2
+          OutputPath: $.Payload
+          Next: Generate Video Clip Transcripts
+        Generate Video Clip Transcripts:
+          Type: Task
+          Resource: arn:aws:states:::lambda:invoke
+          Parameters:
+            Payload.$: $
+            FunctionName:
+          Retry:
+            - ErrorEquals:
+                - Lambda.ServiceException
+                - Lambda.AWSLambdaException
+                - Lambda.SdkClientException
+                - Lambda.TooManyRequestsException
+              IntervalSeconds: 1
+              MaxAttempts: 3
+              BackoffRate: 2
+          Next: Wait X Seconds
+          OutputPath: $.Payload
+        Wait X Seconds:
+          Type: Wait
+          Seconds: ${WaitTimeForJob}
+          Next: Get All Jobs Status
+        Get All Jobs Status:
+          Type: Task
+          Resource: arn:aws:states:::lambda:invoke
+          OutputPath: $.Payload
+          Parameters:
+            Payload.$: $
+            FunctionName: >-
+              ${CheckTranscriptionJobsFunctionArn}
+          Retry:
+            - ErrorEquals:
+                - Lambda.ServiceException
+                - Lambda.AWSLambdaException
+                - Lambda.SdkClientException
+                - Lambda.TooManyRequestsException
+              IntervalSeconds: 1
+              MaxAttempts: 3
+              BackoffRate: 2
+          Next: All Jobs Completed?
+        All Jobs Completed?:
+          Type: Choice
+          Choices:
+            - Variable: $.AllJobStatus
+              StringEquals: COMPLETED
+              Next: Summarize Video Clips
+          Default: Wait X Seconds
+        Summarize Video Clips:
+          Type: Task
+          Resource: arn:aws:states:::lambda:invoke
+          Parameters:
+            Payload.$: $
+            FunctionName:
+          Retry:
+            - ErrorEquals:
+                - Lambda.ServiceException
+                - Lambda.AWSLambdaException
+                - Lambda.SdkClientException
+                - Lambda.TooManyRequestsException
+              IntervalSeconds: 1
+              MaxAttempts: 3
+              BackoffRate: 2
+          End: true
+    Label: Map
+    MaxConcurrency: ${MaxConcurrency}
+    ItemsPath: $.Segments
+    ItemBatcher:
+      MaxItemsPerBatch: ${MaxItemsPerBatch}
+      BatchInput:
+        Video.$: $.Video
+    ResultPath: null
+    Next: Create Final PDF Report
+  Create Final PDF Report:
+    Type: Task
+    Resource: arn:aws:states:::lambda:invoke
+    OutputPath: $.Payload
+    Parameters:
+      Payload.$: $
+      FunctionName: >-
+        ${CreateSummaryReportFunctionArn}
+    Retry:
+      - ErrorEquals:
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2
+    End: true
+TimeoutSeconds: 3600

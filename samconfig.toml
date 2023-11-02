@@ -1,0 +1,11 @@
+version = 0.1
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "video-summarization"
+s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-1eas5fab941go"
+s3_prefix = "video-summarization"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "S3BucketName=\"videosummarization\" VideoPrefix=\"video-files\" VideoProcessingStagingPrefix=\"video-processing-staging\" VideoSummaryFilesPrefix=\"video-summary-files\" VideoPDFReportFilesPrefix=\"video-pdf-report-files\" BedrockModelId=\"ai21.j2-ultra-v1\" SummparyReportURLExpiration=\"86400\" RekognitionSNSTopicName=\"video-segments-detection-notification-topic\" VideoProcessingWorkflowName=\"video-processing-workflow\" PDFFileURLExpiration=\"86400\" MaxConcurrency=\"10\" MaxItemsPerBatch=\"10\" WaitTimeForJob=\"30\""
+image_repositories = []
