@@ -20,7 +20,8 @@ States:
           Resource: arn:aws:states:::lambda:invoke
           Parameters:
             Payload.$: $
-            FunctionName:
+            FunctionName: >-
+              ${GenerateVideoSegmentsFunctionArn}
           Retry:
             - ErrorEquals:
                 - Lambda.ServiceException
@@ -37,7 +38,8 @@ States:
           Resource: arn:aws:states:::lambda:invoke
           Parameters:
             Payload.$: $
-            FunctionName:
+            FunctionName: >-
+              ${GenerateVideoClipTranscriptsFunctionArn}
           Retry:
             - ErrorEquals:
                 - Lambda.ServiceException
@@ -83,7 +85,8 @@ States:
           Resource: arn:aws:states:::lambda:invoke
           Parameters:
             Payload.$: $
-            FunctionName:
+            FunctionName: >-
+              ${SummarizeVideoClipsFunctionArn}
           Retry:
             - ErrorEquals:
                 - Lambda.ServiceException
