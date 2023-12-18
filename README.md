@@ -1,4 +1,4 @@
-# Generate video summary report at scale using generative AI and serverless on AWS
+# Generate video summary report using generative AI and serverless on AWS
 
 This repository showcases an automated method for creating comprehensive video summary reports utilizing Amazon Bedrock with the AI21 Labs Jurassic-2 Ultra model. The process involves automating the extraction of images from each frame of video presentations and generating corresponding text summaries. Additionally, it generates a consolidated PDF report that merges each frame's image with its respective text summary.
 
